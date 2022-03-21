@@ -1,0 +1,127 @@
+
+# インストール
+dnf -y install wget gcc unzip make libnsl
+
+# アップデート
+dnf -y update
+
+# firewalldインストール&起動
+dnf -y install firewalld
+systemctl start firewalld
+
+# firewalld minecraft用設定追加
+firewall-cmd --permanent --new-service minecraft
+firewall-cmd --permanent --service=minecraft --set-description=minecraft
+firewall-cmd --permanent --service=minecraft --set-short=minecraft
+firewall-cmd --permanent --service=minecraft --add-port=19132/tcp
+firewall-cmd --permanent --service=minecraft --add-port=19133/tcp
+firewall-cmd --permanent --service=minecraft --add-port=19132/udp
+firewall-cmd --permanent --service=minecraft --add-port=19133/udp
+cat /etc/firewalld/services/minecraft.xml
+# ----
+# ?xml version="1.0" encoding="utf-8"?>
+# service>
+#  <short>minecraft</short>
+#  <description>minecraft</description>
+#  <port port="19132" protocol="tcp"/>
+#  <port port="19133" protocol="tcp"/>
+#  <port port="19132" protocol="udp"/>
+#  <port port="19133" protocol="udp"/>
+# /service>
+# ----
+
+firewall-cmd --add-service=minecraft --zone=public --permanent
+firewall-cmd --reload
+
+# 各種ディレクトリ作成
+mkdir -p /usr/local/games/minecraft/backups
+mkdir -p /usr/local/games/minecraft/bedrock-server
+mkdir -p /usr/local/games/minecraft/zips
+
+# minecraft本体ダウンロード
+# 公式ページ(https://www.minecraft.net/ja-jp/download/server/bedrock)
+# のリンク先アドレスをコピーして使ってください。
+# 「I agree ...」にチェックを入れるとダウンロードボタンのアドレスが見れます
+cd /usr/local/games/minecraft/zips
+wget https://minecraft.azureedge.net/bin-linux/bedrock-server-1.18.12.01.zip
+unzip bedrock-server-1.18.12.01.zip -d ../bedrock-server
+
+# libssl.so.1.1, libcrypto.so.1.1を取得
+cd /usr/local/src
+wget https://www.openssl.org/source/openssl-1.1.1.tar.gz
+tar xvzf openssl-1.1.1.tar.gz
+rm openssl-1.1.1.tar.gz
+cd openssl-1.1.1
+./config -fPIC shared
+make
+
+cp -i /usr/local/src/openssl-1.1.1/libssl.so.1.1 /usr/local/games/minecraft/bedrock-server/
+cp -i /usr/local/src/openssl-1.1.1/libcrypto.so.1.1 /usr/local/games/minecraft/bedrock-server/
+
+# libstdc++.so.6確認
+ls -la /usr/lib64/libstdc++.so.6
+# -----
+# バージョンがlibstdc++.so.6.0.25 以上であること
+# -----
+
+# libm.so.6確認
+ls -la /usr/lib64/libm.so.6
+# -----
+# バージョンがlibm-2.27.so 以上であること
+# -----
+
+# サービス設定ファイル
+cat << _EOF_ > /etc/systemd/system/minecraft.service
+[Unit]
+Description=minecraft
+After=syslog.target network.target
+
+[Service]
+Type=forking
+EnvironmentFile=/etc/default/minecraft
+WorkingDirectory=/usr/local/games/minecraft/bedrock-server/
+ExecStart=/usr/local/bin/minecraft-start.sh
+ExecStop=/usr/local/bin/minecraft-stop.sh
+User=root
+Group=root
+KillMode=none
+Restart = always
+
+[Install]
+WantedBy=multi-user.target
+_EOF_
+
+# 起動スクリプト
+TFILE=/usr/local/bin/minecraft-start.sh
+echo '#!/bin/bash' > ${TFILE}
+echo '[ -d $RUN_DIR ] || mkdir -p ${RUN_DIR}' >> ${TFILE}
+echo 'cd /usr/local/games/minecraft/bedrock-server/' >> ${TFILE}
+echo 'LD_LIBRARY_PATH=. ./bedrock_server > $LOG 2>$ERROR_LOG &' >> ${TFILE}
+echo 'echo $! > ${PID_FILE}' >> ${TFILE}
+
+# 停止スクリプト
+TFILE=/usr/local/bin/minecraft-stop.sh
+echo '#!/bin/bash' > ${TFILE}
+echo '[ -f ${PID_FILE} ] && kill -9 $(cat ${PID_FILE})' >> ${TFILE}
+echo '[ -f ${LOCK_FILE} ] && rm ${LOCK_FILE}' >> ${TFILE}
+echo '[ -f ${PID_FILE} ] && rm ${PID_FILE}' >> ${TFILE}
+
+# 設定ファイル作成
+cat << _EOF_ > /etc/default/minecraft
+LOG="/var/log/minecraft/minecraft.log"
+ERROR_LOG="/var/log/minecraft/minecraft.log.error_log"
+RUN_DIR="/var/lib/minecraft/run/"
+LOCK_FILE=/var/lib/minecraft/minecraft.lock
+PID_FILE=/var/lib/minecraft/run/minecraft.pid
+_EOF_
+
+# ディレクトリ作成, スクリプト実行権限付与
+mkdir /var/log/minecraft/
+mkdir /var/lib/minecraft/
+chmod 755 /usr/local/bin/minecraft-start.sh
+chmod 755 /usr/local/bin/minecraft-stop.sh
+
+# 起動
+systemctl enable minecraft
+systemctl start minecraft
+

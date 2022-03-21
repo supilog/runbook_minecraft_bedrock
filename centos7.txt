@@ -1,0 +1,152 @@
+# インストール
+yum -y install gmp-devel mpfr-devel libmpc-devel glibc-devel perl zlib-devel
+
+# アップデート
+yum -y update
+ 
+# firewalldインストール&起動
+dnf -y install firewalld
+systemctl start firewalld
+
+# firewalld minecraft用設定追加
+firewall-cmd --permanent --new-service minecraft
+firewall-cmd --permanent --service=minecraft --set-description=minecraft
+firewall-cmd --permanent --service=minecraft --set-short=minecraft
+firewall-cmd --permanent --service=minecraft --add-port=19132/tcp
+firewall-cmd --permanent --service=minecraft --add-port=19133/tcp
+firewall-cmd --permanent --service=minecraft --add-port=19132/udp
+firewall-cmd --permanent --service=minecraft --add-port=19133/udp
+cat /etc/firewalld/services/minecraft.xml
+# ----
+# ?xml version="1.0" encoding="utf-8"?>
+# service>
+#  <short>minecraft</short>
+#  <description>minecraft</description>
+#  <port port="19132" protocol="tcp"/>
+#  <port port="19133" protocol="tcp"/>
+#  <port port="19132" protocol="udp"/>
+#  <port port="19133" protocol="udp"/>
+# /service>
+# ----
+
+firewall-cmd --add-service=minecraft --zone=public --permanent
+firewall-cmd --reload
+ 
+# 各種ディレクトリ作成
+mkdir -p /usr/local/games/minecraft/backups
+mkdir -p /usr/local/games/minecraft/bedrock-server
+mkdir -p /usr/local/games/minecraft/zips
+ 
+# minecraft本体ダウンロード
+# 公式ページ(https://www.minecraft.net/ja-jp/download/server/bedrock)
+# のリンク先アドレスをコピーして使ってください。
+# 「I agree ...」にチェックを入れるとダウンロードボタンのアドレスが見れます
+cd /usr/local/games/minecraft/zips
+wget https://minecraft.azureedge.net/bin-linux/bedrock-server-1.18.12.01.zip
+unzip bedrock-server-1.18.12.01.zip -d ../bedrock-server
+ 
+# libssl.so.1.1, libcrypto.so.1.1を取得
+cd /usr/local/src
+wget https://www.openssl.org/source/openssl-1.1.1.tar.gz
+tar xvzf openssl-1.1.1.tar.gz
+rm openssl-1.1.1.tar.gz
+cd openssl-1.1.1
+./config -fPIC shared
+make
+   
+cp -i /usr/local/src/openssl-1.1.1/libssl.so.1.1 /usr/local/games/minecraft/bedrock-server/
+cp -i /usr/local/src/openssl-1.1.1/libcrypto.so.1.1 /usr/local/games/minecraft/bedrock-server/
+ 
+# libstdc++.so.6取得
+cd /usr/local/src
+wget http://ftp.tsukuba.wide.ad.jp/software/gcc/releases/gcc-8.2.0/gcc-8.2.0.tar.gz
+tar zxvf gcc-8.2.0.tar.gz
+rm gcc-8.2.0.tar.gz
+cd gcc-8.2.0
+ 
+./contrib/download_prerequisites
+mkdir build
+cd build
+../configure --enable-languages=c,c++ --prefix=/usr/local --disable-bootstrap --disable-multilib
+make
+ 
+cd /usr/local/src/gcc-8.2.0
+cp -i ./build/x86_64-pc-linux-gnu/libstdc++-v3/src/.libs/libstdc++.so.6.0.25 /usr/lib64/
+ls -la /usr/lib64/libstdc*
+cd /usr/lib64
+ln -sf /usr/lib64/libstdc++.so.6.0.25 /usr/lib64/libstdc++.so.6
+ls -la /usr/lib64/libstdc*
+strings /usr/lib64/libstdc++.so.6 | grep ^GLIBCXX | sort
+ 
+# libm.so.6取得
+yum -y install centos-release-scl-rh
+yum -y install devtoolset-4-gcc devtoolset-4-gcc-c++ devtoolset-4-binutils
+scl enable devtoolset-4 'bash'
+ 
+cd /usr/local/src/
+wget http://ftp.gnu.org/gnu/glibc/glibc-2.27.tar.gz
+tar zxvf glibc-2.27.tar.gz
+rm /usr/local/src/glibc-2.27.tar.gz
+mkdir /usr/local/src/glibc-2.27/build
+cd /usr/local/src/glibc-2.27/build
+ 
+../configure --prefix=/opt/glibc-2.27
+make -j4
+cp -i /usr/local/src/glibc-2.27/build/math/libm.so /usr/lib64/libm-2.27.so
+ln -sf /usr/lib64/libm-2.27.so /usr/lib64/libm.so.6
+ 
+ 
+# サービス設定ファイル
+cat << _EOF_ > /etc/systemd/system/minecraft.service
+[Unit]
+Description=minecraft
+After=syslog.target network.target
+   
+[Service]
+Type=forking
+EnvironmentFile=/etc/default/minecraft
+WorkingDirectory=/usr/local/games/minecraft/bedrock-server/
+ExecStart=/usr/local/bin/minecraft-start.sh
+ExecStop=/usr/local/bin/minecraft-stop.sh
+User=root
+Group=root
+KillMode=none
+Restart = always
+   
+[Install]
+WantedBy=multi-user.target
+_EOF_
+ 
+# 起動スクリプト
+TFILE=/usr/local/bin/minecraft-start.sh
+echo '#!/bin/bash' > ${TFILE}
+echo '[ -d $RUN_DIR ] || mkdir -p ${RUN_DIR}' >> ${TFILE}
+echo 'cd /root/bedrock-server' >> ${TFILE}
+echo 'LD_LIBRARY_PATH=. ./bedrock_server > $LOG 2>$ERROR_LOG &' >> ${TFILE}
+echo 'echo $! > ${PID_FILE}' >> ${TFILE}
+ 
+# 停止スクリプト
+TFILE=/usr/local/bin/minecraft-stop.sh
+echo '#!/bin/bash' > ${TFILE}
+echo '[ -f ${PID_FILE} ] && kill -9 $(cat ${PID_FILE})' >> ${TFILE}
+echo '[ -f ${LOCK_FILE} ] && rm ${LOCK_FILE}' >> ${TFILE}
+echo '[ -f ${PID_FILE} ] && rm ${PID_FILE}' >> ${TFILE}
+   
+# 設定ファイル作成
+cat << _EOF_ > /etc/default/minecraft
+LOG="/var/log/minecraft/minecraft.log"
+ERROR_LOG="/var/log/minecraft/minecraft.log.error_log"
+RUN_DIR="/var/lib/minecraft/run/"
+LOCK_FILE=/var/lib/minecraft/minecraft.lock
+PID_FILE=/var/lib/minecraft/run/minecraft.pid
+_EOF_
+   
+# ディレクトリ作成, スクリプト実行権限付与
+mkdir /var/log/minecraft/
+mkdir /var/lib/minecraft/
+chmod 755 /usr/local/bin/minecraft-start.sh
+chmod 755 /usr/local/bin/minecraft-stop.sh
+   
+# 起動
+systemctl enable minecraft
+systemctl start minecraft
