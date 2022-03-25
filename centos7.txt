@@ -5,7 +5,7 @@ yum -y install gmp-devel mpfr-devel libmpc-devel glibc-devel perl zlib-devel
 yum -y update
  
 # firewalldインストール&起動
-dnf -y install firewalld
+yum -y install firewalld
 systemctl start firewalld
 
 # firewalld minecraft用設定追加
